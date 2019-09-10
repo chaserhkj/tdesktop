@@ -61,6 +61,38 @@ constexpr auto kSetMyActionForMs = 10000;
 constexpr auto kNewBlockEachMessage = 50;
 constexpr auto kSkipCloudDraftsFor = TimeId(3);
 
+bool checkFiltered(HistoryItem* item) {
+	if (auto history_msg = item->toHistoryMessage()){
+		if (auto user = history_msg->author()->asUser()) {
+			user->updateFull();
+			if (user->isBlocked()){
+				return true;
+			}
+		}
+	}
+	if (auto reply = item->Get<HistoryMessageReply>()) {
+		if (auto reply_msg = reply->replyToMsg) {
+			if (auto user = reply_msg->author()->asUser()) {
+				user->updateFull();
+				if (user->isBlocked()){
+					return true;
+				}
+			}
+		}
+	}
+	if (auto forward = item->Get<HistoryMessageForwarded>()) {
+		if (auto peer = forward->originalSender){
+			if (auto user = peer->asUser()) {
+				user->updateFull();
+				if (user->isBlocked()) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
 } // namespace
 
 History::History(not_null<Data::Session*> owner, PeerId peerId)
@@ -350,6 +382,13 @@ bool History::updateSendActionNeedsAnimating(
 		const MTPSendMessageAction &action) {
 	if (peer->isSelf()) {
 		return false;
+	}
+
+	if (user) {
+		user->updateFull();
+		if (user->isBlocked()){
+			return false;
+		}
 	}
 
 	using Type = SendAction::Type;
@@ -1334,6 +1373,9 @@ void History::viewReplaced(not_null<const Element*> was, Element *now) {
 }
 
 void History::addItemToBlock(not_null<HistoryItem*> item) {
+	if (checkFiltered(item)) {
+		return;
+	}
 	Expects(!item->mainView());
 
 	auto block = prepareBlockForAddingItem();
@@ -1450,6 +1492,9 @@ void History::addItemsToLists(
 		markupSenders = &peer->asChannel()->mgInfo->markupSenders;
 	}
 	for (const auto item : ranges::view::reverse(items)) {
+		if (checkFiltered(item)) {
+			continue;
+		}
 		item->addToUnreadMentions(UnreadMentionType::Existing);
 		if (item->from()->id) {
 			if (lastAuthors) { // chats
@@ -1524,6 +1569,9 @@ void History::addToSharedMedia(
 		const std::vector<not_null<HistoryItem*>> &items) {
 	std::vector<MsgId> medias[Storage::kSharedMediaTypeCount];
 	for (const auto item : items) {
+		if (checkFiltered(item)) {
+			continue;
+		}
 		if (const auto types = item->sharedMediaTypes()) {
 			for (auto i = 0; i != Storage::kSharedMediaTypeCount; ++i) {
 				const auto type = static_cast<Storage::SharedMediaType>(i);
@@ -2279,6 +2327,9 @@ void History::clearSharedMedia() {
 }
 
 void History::setLastMessage(HistoryItem *item) {
+	if (checkFiltered(item)) {
+		return;
+	}
 	if (_lastMessage) {
 		if (*_lastMessage == item) {
 			return;
